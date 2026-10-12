@@ -1,0 +1,5 @@
+services:
+  backend-service-2:
+    build: .
+    ports:
+      - "3000:3000"

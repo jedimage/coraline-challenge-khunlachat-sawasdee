@@ -1,0 +1,82 @@
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        ENV_NAME: "prod"
+        RUNNER_TAG: "project-builder-tag"
+    - if: $CI_COMMIT_BRANCH == "uat"
+      variables:
+        ENV_NAME: "uat"
+        RUNNER_TAG: "project-builder-tag"
+    - if: $CI_COMMIT_BRANCH == "develop"
+      variables:
+        ENV_NAME: "dev"
+        RUNNER_TAG: "project-builder-tag"
+    - when: never
+
+stages:
+  - build
+  - deploy_cloudflare
+
+variables:
+  PNPM_VERSION: "10.11.0"
+  BUILD_DIR: "dist"
+
+.node_setup: &node_setup
+  - corepack enable
+  - corepack prepare "pnpm@${PNPM_VERSION}" --activate
+  - pnpm install --frozen-lockfile
+
+build:
+  stage: build
+  tags:
+    - ${RUNNER_TAG}
+  image: node:20-alpine
+  before_script: *node_setup
+  script:
+    - |
+      echo "ENV: ${ENV_NAME}"
+      # GitLab file variables contain the path to a temporary file.
+      case "${ENV_NAME}" in
+        dev) cp "${FE_DOTENV_DEV}" .env ;;
+        uat) cp "${FE_DOTENV_UAT}" .env ;;
+        prod) cp "${FE_DOTENV_PROD}" .env ;;
+        *) echo "Unsupported environment: ${ENV_NAME}" >&2; exit 1 ;;
+      esac
+    - rm -rf .env.*
+    - ls -al
+    - pnpm run build
+  environment:
+    name: ${ENV_NAME}
+    action: prepare
+  artifacts:
+    paths:
+      - ${BUILD_DIR}
+    expire_in: 1 week
+
+deploy_cloudflare:
+  stage: deploy_cloudflare
+  tags:
+    - ${RUNNER_TAG}
+  image: node:20-alpine
+  needs:
+    - job: build
+      artifacts: true
+  before_script:
+    - npm install -g wrangler
+  script:
+    - test -n "${CLOUDFLARE_ACCOUNT_ID}"
+    - test -n "${CLOUDFLARE_API_TOKEN}"
+
+    - |
+      if wrangler pages project list | grep -q "${CI_PROJECT_DIR}-${ENV_NAME}"; then
+        echo "Project exists: ${CI_PROJECT_DIR}-${ENV_NAME}"
+      else
+        echo "Creating project: ${CI_PROJECT_DIR}-${ENV_NAME}"
+        wrangler pages project create "${CI_PROJECT_DIR}-${ENV_NAME}" --production-branch=main
+      fi
+
+    # Each environment has a separate Pages project with main as its production branch.
+    - wrangler pages deploy "${BUILD_DIR}" --project-name="${CI_PROJECT_DIR}-${ENV_NAME}" --branch=main
+  environment:
+    name: ${ENV_NAME}

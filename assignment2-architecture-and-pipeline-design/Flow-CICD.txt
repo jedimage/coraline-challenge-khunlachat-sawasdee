@@ -1,0 +1,36 @@
+Assume ว่าเราใช้ gitlab
+
+Frontend
+- assume ว่าเราใช้ vite เป็น frontend
+- workflow ทำแค่ branch ที่กำหนดไว้ เช่น dev/uat/main
+- deploy ลง cloudflare pages
+- เนื่องจากเป็น static web frontend เราจะเก็บ env ไว้ที่ repository เพื่อ build
+
+pipeline stage
+1. เช็คว่า branch ไหนที่ push เข้ามา
+2. เอา env มาใช้ ให้ถูก environment
+3. ใช้ wrangler ในการยิง deploy ขึ้นไปที่ cloudflare ด้วย "ชื่อ <project-name>-<environment>"
+
+---
+Backend
+- assume ว่าเราใช้ go เป็น backend
+- workflow ทำแค่ branch ที่กำหนดไว้ เช่น dev/uat/main
+- deploy ลง google cloud run
+
+pipeline stage
+1. เช็คว่า branch ไหนที่ push เข้ามา
+2. init variable ต่างๆ ถ้าเป็น nonprod ก็ให้ไป deploy ที่ google cloud project-nonprod / ถ้าเป็น prod ก็ให้ไป deploy ที่ google cloud prod แล้วใช้ serviceaccount ให้ถูก project
+3. code scanner / osv if needed
+4. build and push dockerfile จาก repository ไปที่ artifact registry ของ gcp
+5. redeploy ที่ cloudrun
+
+---
+KongAPIGateway
+- ใช้เป็น internet facing ของฝั่ง backend
+- เนื่องจากเป็น infra repository เราจะมีแค่ branch main แล้วแบ่ง config ตาม directory หรือไฟล์ที่ถูกแก้
+- deploy ลง google cloud run
+
+pipeline stage
+1. เช็คว่าไฟล์ไหนถูกแก้ไข เช่น kong.dev.yml / kong.uat.yml / kong.prod.yml
+2. build + push dockerfile ของ kong ด้วย build arg KONG_CONFIG=kong/kong.dev.yml ตาม rules ของ file ที่ถูกเปลี่ยน เช่น ถ้าไฟล์ .dev. ถูกเปลี่ยน เราจะ assume ว่า จะถูก deploy ไปที่ dev environment
+3. redeploy ที่ cloudrun

@@ -1,0 +1,73 @@
+variables:
+  SERVICE_NAME: "backend-service-1"
+  ARTIFACT_REGISTRY_REPOSITORY: "backend-service-1"
+  IMAGE_REPO: "asia-southeast1-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REGISTRY_REPOSITORY}/${SERVICE_NAME}"
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        ENV_NAME: "prod"
+        IMAGE_TAG: "prod-latest"
+        RUNNER_TAG: "project-builder-tag"
+        GCP_PROJECT: "example-project-prod"
+        PROJECT_SA_KEY: $GCP_PROD_SA_KEY
+    - if: $CI_COMMIT_BRANCH == "uat"
+      variables:
+        ENV_NAME: "uat"
+        IMAGE_TAG: "uat-latest"
+        RUNNER_TAG: "project-builder-tag"
+        GCP_PROJECT: "example-project-nonprod"
+        PROJECT_SA_KEY: $GCP_NONPROD_SA_KEY
+    - if: $CI_COMMIT_BRANCH == "develop"
+      variables:
+        ENV_NAME: "develop"
+        IMAGE_TAG: "develop-latest"
+        RUNNER_TAG: "project-builder-tag"
+        GCP_PROJECT: "example-project-nonprod"
+        PROJECT_SA_KEY: $GCP_NONPROD_SA_KEY
+    - when: never
+
+stages:
+  - build
+  - deploy-cloudrun
+
+build:
+  stage: build
+  tags:
+    - ${RUNNER_TAG}
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - echo "${PROJECT_SA_KEY}" > /kaniko/key.json
+    - grep -Ei "client_email|project_id" /kaniko/key.json
+    - export GOOGLE_APPLICATION_CREDENTIALS=/kaniko/key.json
+    - |
+      /kaniko/executor \
+        --context "${CI_PROJECT_DIR}" \
+        --dockerfile "${CI_PROJECT_DIR}/Dockerfile" \
+        --destination "${IMAGE_REPO}:${CI_COMMIT_SHORT_SHA}" \
+        --destination "${IMAGE_REPO}:${IMAGE_TAG}" \
+        --cleanup
+
+deploy-cloudrun:
+  stage: deploy-cloudrun
+  tags:
+    - ${RUNNER_TAG}
+  image: google/cloud-sdk:slim
+  needs:
+    - build
+  script:
+    - echo "${PROJECT_SA_KEY}" > key.json
+    - gcloud auth activate-service-account --key-file=key.json
+    - gcloud config set project "${GCP_PROJECT}"
+    - |
+      gcloud run deploy "${SERVICE_NAME}-${ENV_NAME}" \
+        --image "${IMAGE_REPO}:${CI_COMMIT_SHORT_SHA}" \
+        --region "${GCP_REGION}" \
+        --platform managed \
+        --no-allow-unauthenticated \
+        --quiet
+  environment:
+    name: ${ENV_NAME}

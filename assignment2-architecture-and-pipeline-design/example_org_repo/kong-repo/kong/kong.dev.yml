@@ -1,0 +1,22 @@
+_format_version: "3.0"
+
+# Replace these placeholder URLs with the deployed Cloud Run service URLs.
+# These simple routes assume the backends allow unauthenticated invocation.
+services:
+  - name: backend-service-1
+    url: https://backend-service-1-dev-1234567890.asia-southeast1.run.app
+    routes:
+      - name: api1
+        paths:
+          - /api1
+        strip_path: true
+        preserve_host: false
+
+  - name: backend-service-2
+    url: https://backend-service-2-dev-1234567890.asia-southeast1.run.app
+    routes:
+      - name: api2
+        paths:
+          - /api2
+        strip_path: true
+        preserve_host: false

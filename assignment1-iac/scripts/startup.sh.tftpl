@@ -1,0 +1,96 @@
+#!/bin/bash
+set -euo pipefail
+# Explicitly disable inherited tracing before handling any credentials.
+set +x
+umask 077
+trap 'unset MB_DB_PASS; echo "Metabase bootstrap failed; inspect non-sensitive startup progress." >&2' ERR
+
+log() { echo "[metabase-bootstrap] $*"; }
+retry() {
+  local attempt
+  for attempt in $(seq 1 6); do
+    if "$@"; then return 0; fi
+    log "Operation not ready (attempt $attempt/6); retrying in 10 seconds."
+    sleep 10
+  done
+  return 1
+}
+
+log "Installing bootstrap dependencies."
+export DEBIAN_FRONTEND=noninteractive
+retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
+retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y ca-certificates curl
+if ! command -v docker >/dev/null 2>&1; then
+  retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y docker.io
+fi
+if ! command -v gcloud >/dev/null 2>&1; then
+  log "Installing Google Cloud CLI from the official APT repository."
+  retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y gnupg
+  retry curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+    https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    --output /usr/share/keyrings/cloud.google.asc
+  gpg --batch --yes --dearmor --output /usr/share/keyrings/cloud.google.gpg \
+    /usr/share/keyrings/cloud.google.asc
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+    > /etc/apt/sources.list.d/google-cloud-sdk.list
+  # APT's unprivileged reader needs access despite this script's restrictive umask.
+  chmod 0644 /usr/share/keyrings/cloud.google.gpg /etc/apt/sources.list.d/google-cloud-sdk.list
+  rm -f /usr/share/keyrings/cloud.google.asc
+  retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
+  retry apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 install -y google-cloud-cli
+fi
+systemctl enable --now docker
+
+if docker container inspect metabase >/dev/null 2>&1; then
+  log "Existing container found; preserving it and its restart policy."
+  # Docker normally starts it automatically; start also recovers a stopped container.
+  docker start metabase >/dev/null
+else
+  log "Pulling pinned Metabase image."
+  retry docker pull '${image}'
+  log "Retrieving database password using attached VM identity."
+  # gcloud automatically uses the attached GCE service account; no login or key file.
+  # Capture stdout only in memory and suppress CLI diagnostics containing API details.
+  export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+  export CLOUDSDK_CORE_DISABLE_FILE_LOGGING=1
+  MB_DB_PASS=""
+  for attempt in $(seq 1 12); do
+    if MB_DB_PASS="$(gcloud secrets versions access latest \
+      --secret="${secret_id}" \
+      --project="${project_id}" 2>/dev/null)" && [ -n "$MB_DB_PASS" ]; then
+      break
+    fi
+    unset MB_DB_PASS
+    if [ "$attempt" -eq 12 ]; then
+      log "Secret retrieval failed; check API, IAM, latest version and network connectivity." >&2
+      exit 1
+    fi
+    log "Secret access not ready (attempt $attempt/12); retrying in 10 seconds."
+    sleep 10
+  done
+  export MB_DB_PASS
+  docker run -d --name metabase --restart unless-stopped \
+    --publish 3000:3000 \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    -e MB_DB_TYPE=postgres \
+    -e MB_DB_HOST='${db_host}' \
+    -e MB_DB_PORT=5432 \
+    -e MB_DB_DBNAME='${db_name}' \
+    -e MB_DB_USER='${db_user}' \
+    -e MB_DB_PASS \
+    -e MB_SITE_URL='${site_url}' \
+    '${image}' >/dev/null
+  unset MB_DB_PASS
+fi
+
+log "Waiting up to ten minutes for application readiness."
+for attempt in $(seq 1 60); do
+  if [ "$(docker inspect --format '{{.State.Running}}' metabase)" = true ] && \
+    curl --fail --silent --max-time 5 http://127.0.0.1:3000/api/health >/dev/null; then
+    log "Metabase is running and /api/health is ready."
+    exit 0
+  fi
+  sleep 10
+done
+log "Metabase did not become ready; Docker restart and MIG autohealing remain enabled."
+exit 1

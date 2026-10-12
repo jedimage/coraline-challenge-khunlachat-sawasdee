@@ -1,0 +1,3 @@
+include:
+  - project: 'myorg/pipeline-repo'
+    file: 'backend-service-2-repo/.gitlab-ci.yml'

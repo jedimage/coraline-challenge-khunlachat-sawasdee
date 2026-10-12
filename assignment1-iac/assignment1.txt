@@ -1,0 +1,15 @@
+ข้อที่ 1: การจัดเตรียม Infrastructure สํา หรับการ Deploy Application
+โจทย์
+ให้ผู้สมัครออกแบบและเขียน Infrastructure as Code สํา หรับ deploy ระบบ Metabase
+พร้อมฐานข้อมูล PostgreSQL โดยระบบต้องสามารถเข้าใช้งานผ่าน web ได้จริง
+สิ่งที่คาดหวัง
+● provision infrastructure ด้วย Terraform
+● วางโครงสร้างระบบสํา หรับ Metabase และฐานข้อมูล PostgreSQL ได้อย่างเหมาะสม
+● ฐานข้อมูล PostgreSQL ต้องไม่สามารถเข้าถึงได้จาก public network โดยตรง
+● มีการจัดการ configuration และ secret อย่างเหมาะสม
+
+เอกสารหรือไฟล์ที่ต้องส่ง
+● Terraform code
+● README
+
+Doc: https://www.metabase.com/docs/latest/installation-and-operation/running-metabase-on-docker
